@@ -1,0 +1,219 @@
+---
+title: "Calculate Partitioning"
+author: "Rebecca Gustine"
+date: "2024-01-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(raster)
+library(ggplot2)
+# library(tidyr)
+library(dplyr)
+library(reshape)
+library(funtimes)
+
+```
+
+Calculates ET/P partitioning
+
+```{r setup docs}
+snow_classes <- raster("D:/NASA/SBG Drought/Snow Classifications/snowClass_resample_terraclim_resolution.tif")
+snow_classes_cropped <- crop(snow_classes, 
+                             raster("D:/NASA/SBG Drought/TerraClim/6_snow_droughts/northern/modified_boundaries/1959.tif"))
+
+swe_files <- list.files("D:/NASA/SBG Drought/TerraClim/6_snow_droughts/northern/modified_boundaries/", full.names = TRUE)
+
+```
+
+This is calculating the yearly partitioning of P/ET to see how it is changing over time with allocation--more going to ET during this time?
+```{r calculating partition}
+
+outs_part <- data.frame(matrix(nrow = length(swe_files)*25,ncol = 6))
+names(outs_part) <- c("Year", "SnowClass","SnowDrought","p","t","aet")
+count = 1
+
+for (file in swe_files) {
+  
+  swe <- raster(file)
+  name <- strsplit(file,"/")[[1]][8]
+  
+  p <- raster(paste("D:/NASA/SBG Drought/TerraClim/4_average_yearly/northern/Precip/",name, sep=""))
+  t <- raster(paste("D:/NASA/SBG Drought/TerraClim/4_average_yearly/northern/Temp/",name, sep=""))
+  aet <- raster(paste("D:/NASA/SBG Drought/TerraClim/4_average_yearly/northern/AET/",name, sep=""))
+  
+  brick1 <- crop(brick(p,t,aet),swe)
+  brick2 <- stack(brick1,swe,snow_classes_cropped)
+  brick.df <- as.data.frame(brick2,xy=TRUE)
+  names(brick.df) <- c("x","y","p","t","aet","SnowDrought","SnowClass")
+  
+  brick.df <- brick.df[which(is.na(brick.df$SnowDrought)==FALSE),] 
+  brick.df <- brick.df %>% select(p,t,aet,SnowDrought,SnowClass) %>% filter(SnowClass < 7)
+  
+  final <- brick.df %>% 
+    group_by(SnowClass,SnowDrought) %>% 
+    summarize_all(mean, na.rm = TRUE)
+  
+
+  outs_part$Year[count:(count+nrow(final)-1)] <- strsplit(name,".tif")[[1]][1]
+  outs_part$SnowClass[count:(count+nrow(final)-1)] <- final$SnowClass
+  outs_part$SnowDrought[count:(count+nrow(final)-1)] <- final$SnowDrought
+  outs_part$p[count:(count+nrow(final)-1)] <- final$p
+  outs_part$t[count:(count+nrow(final)-1)] <- final$t
+  outs_part$aet[count:(count+nrow(final)-1)] <- final$aet
+
+  
+  count = count + 1 + nrow(final)
+  
+}
+
+
+outs_part2 <- outs_part[which(is.na(outs_part$SnowClass)==FALSE),]
+
+write.csv(outs_part2,"D:/NASA/SBG Drought/yearly_averate_p_t_aet_partitioning.csv")
+```
+
+```{r plotting partitioning}
+part <- read.csv("D:/NASA/SBG Drought/yearly_averate_p_t_aet_partitioning.csv")
+p_partition <- part %>% dplyr::select(Year,SnowClass,SnowDrought,p,aet) %>% mutate(e = aet/p) %>% dplyr::select(Year,SnowClass,SnowDrought,e,p)
+precip <- p_partition %>% dplyr::select(p,Year,SnowClass,SnowDrought)
+p_partition <- p_partition %>% dplyr::select(Year,SnowClass,SnowDrought,e) #dropping precipitation
+
+part_long <- melt(p_partition, id.vars = c("Year","SnowClass","SnowDrought"))
+
+classes <- c("Tundra",
+             "Boreal Forest",
+             "Maritime",
+             "Ephemeral",
+             "Prairie",
+             "Montane Forest") #if looking at Ice, change here , "Ice")
+names(classes) <- c("1","2","3","4","5","6") #if looking at ice, change here ,"7"
+
+
+part_long$SnowDrought <- factor(part_long$SnowDrought, levels = c("1","2","3","4"))
+levels(part_long$SnowDrought) <- list(Dry  = "1", `No Drought` = "2", Warm = "3", `Warm & Dry` = "4")
+
+part_long$SnowClass <- factor(part_long$SnowClass, levels = c("1","2","3","4","5","6"))
+levels(part_long$SnowClass) <- list(Tundra = "1",
+             `Boreal Forest`="2",
+             Maritime="3",
+             Ephemeral="4",
+             Prairie="5",
+             `Montane Forest`="6")
+
+```
+
+```{r testing for trends in average yearly time series}
+out2 <- data.frame(matrix(nrow=24,ncol=7))
+names(out2) <- c("SnowClass","Drought","Linear_P","MK_P","Linear_Sig","MK_Sig","Slope")
+count = 1
+
+for (snow in unique(p_partition$SnowClass)) {
+  tmp <- p_partition %>% filter(SnowClass == snow)
+  
+  for (drought in unique(p_partition$SnowDrought)) {
+    
+    tmp2 <- tmp %>% filter(SnowDrought == drought)
+    p_val1 <- funtimes::notrend_test(tmp2$e)$p.value #linear trend test
+    p_val2 <- funtimes::notrend_test(tmp2$e, test = "MK")$p.value #mann kendall test
+    slope <- data.frame(lm(tmp2$e~tmp2$Year)[[1]][2])[1,1]
+    out2[count,1] <- snow
+    out2[count,2] <- drought
+    out2[count,"Linear_P"] <- p_val1
+    out2[count,"MK_P"] <- p_val2
+    out2[count,"Slope"] <- slope
+    count = count + 1
+    
+  }
+  
+  
+}
+
+out2[,c(5:6)] <- "Not Sig"
+out2[which(out2$Linear_P < 0.05),"Linear_Sig"] <- "Sig"
+out2[which(out2$MK_P < 0.05),"MK_Sig"] <- "Sig"
+
+out2$SnowClass <- as.factor(out2$SnowClass)
+levels(out2$SnowClass) <- list(Tundra = "1", `Boreal Forest` = "2", Maritime = "3", `Ephemeral` ="4", Prairie = "5", `Montane Forest` = "6")
+
+out2$Drought <- factor(out2$Drought, levels = c("1","2","3","4"))
+levels(out2$Drought) <- list(Dry  = "1", `No Drought` = "2", Warm = "3", `Warm & Dry` = "4")
+
+
+
+```
+
+I moved the plotting down here because of Noah's comment to only plto the lines that were statistically sig to save space so I am reformatting here instead
+```{r plotting lines}
+out3 <- out2
+names(out3)[2] <- "SnowDrought"
+
+sig_lines <- merge(part_long,out3,by = c("SnowClass","SnowDrought"))
+# sig_lines <- sig_lines %>% filter(Linear_Sig == "Yes")
+sig_lines$SnowDrought <- factor(sig_lines$SnowDrought, levels = c("No Drought","Dry", "Warm", "Warm & Dry"))
+
+
+precip <- precip %>% dplyr::select(Year,SnowClass,p) %>% group_by(Year,SnowClass) %>% summarise_all(mean,na.rm=TRUE)
+precip_long <- melt(precip, id.vars = c("Year","SnowClass"))
+
+names(precip_long)[4] <- "Precip"
+precip_long$SnowClass <- as.factor(precip_long$SnowClass)
+levels(precip_long$SnowClass) <- list(Tundra = "1", `Boreal Forest` = "2", Maritime = "3", `Ephemeral` ="4", Prairie = "5", `Montane Forest` = "6")
+
+p_e <- merge(sig_lines,precip_long, by = c("Year","SnowClass"))
+
+###run this once to generate the legend, remplacing legend.position = "NULL" with "bottom"
+#also, update the width to 7.5 from 3.75, heigh from 2 to 4 and change the name to legend
+for (eco in unique(p_e$SnowClass)) {
+  ecos <- p_e %>% filter(SnowClass == eco)
+  coeff <- round(max(ecos$Precip)/max(ecos$value))
+  part_plot_2axis <- ggplot(data = ecos,aes(x=Year,y = value,group = SnowDrought, color = SnowDrought,linetype = Linear_Sig)) +
+    geom_line() +
+    geom_line(data = ecos,aes(x=Year,y = Precip/coeff,color = "Precipitation"))+
+    labs(linetype = "",x="",title = eco)+
+    scale_color_manual(values = c("grey","brown","red","orange","black"), na.value = "NA") + #add "blue" as the first entry here if dry snow droughts used
+    stat_smooth(method = "lm",se=FALSE) +
+    scale_linetype_manual(values = c("dashed","solid"))+
+    scale_y_continuous(
+    
+    # Features of the first axis
+      name = "", #ET/P
+    
+    # Add a second axis and specify its features
+      sec.axis = sec_axis( trans=~.*coeff, name="") #Precip (mm)
+    ) +
+      labs(color = "") + theme_classic() +
+      theme(strip.background = element_rect(color = "NA"),
+            legend.position = "NULL", #change here for legend or normal figs
+             plot.title = element_text(hjust = 0.5)) +
+      guides(linetype = guide_legend(override.aes = list(color = "black")))
+   
+   name <- substr(eco,1,5)
+   # name <- "legend"
+   png(paste("D:/NASA/SBG Drought/plotting/partition_precip/",name,".png",sep=""),
+       width = 4, height = 2,units = "in", res=800) #for legend: width = 7 & height = 4; for others: width = 4 & height = 2
+   print(part_plot_2axis)
+   dev.off()
+}
+
+
+
+
+
+```
+
+This is calculating the anoms based on the historical mean (normal anomaly calculation). Not using no snow droughts as the baseline but trying to capture how ET anomalies within each of the snow drought and snow classification types is changing
+```{r making winter 6 month normal for AET}
+
+monthly <- data.frame(list.files("D:/NASA/SBG Drought/TerraClim/3_snow_grid_masked_area/AET/",full.names=TRUE)) #change name of variable here
+names(monthly) <- c("Files")
+monthly$Year <- substr(monthly$Files,83,86)
+monthly$Month <- substr(monthly$Files,88,89)
+
+monthly2 <- monthly %>% dplyr::filter(Month == "11" | Month == "12" | Month == "01" | Month == "02" | Month == "03" | Month == "04" )
+
+north <- calc(stack(monthly2$Files),fun=mean,na.rm=TRUE)
+writeRaster(north,"D:/NASA/SBG Drought/TerraClim/5_winter_normals/northern/aet.tif") #change name of variable here
+
+```

@@ -1,0 +1,266 @@
+---
+title: "Plotting Budyko"
+author: "Rebecca Gustine"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(raster)
+library(ggpubr)
+library(ggpattern)
+library(ggsci)
+library(ggh4x)
+library(patchwork)
+
+```
+
+only need to do this once
+```{r loading data}
+path <- "D:/NASA/SBG Drought/plotting/Budyko/wy-aggregated domain/" #change here for dataset
+tmp <- readRDS(paste(path,"all_vars-water-ag.RData",sep="")) #change here for name
+sd.df <- data.frame(matrix(nrow = 452*64,ncol = 10))
+names(sd.df) <- c("Year","band","DroughtType","Elev","SnowType","Y_Axis","X_Axis","P","PET","Expected_Raw")
+count = 1
+
+for (i in 1:length(tmp)){
+  tmp2 <- tmp[[i]]
+  tmp3 <- tmp2 %>% group_by(Year,band,DroughtType,Elev,SnowType) %>%
+    summarize_all(mean,na.rm=TRUE) %>% data.frame()
+  
+  sd.df[(count:(count+nrow(tmp3)-1)),1:10] <- tmp3
+  
+  count = count+nrow(tmp3)
+  print(i)
+}
+
+# sd.df <- as.data.frame(rbindlist(tmp))
+sd.df <- sd.df %>% filter(SnowType < 7) %>% na.omit() #removing 7 (Ice) and 8 (NA--I think as of now, will validate later 7/2/24)
+
+sd.df$exp <- ((1-exp(-sd.df$X_Axis))*sd.df$X_Axis*tanh(sd.df$P/sd.df$PET))^0.5
+
+sd.df$anom <- sd.df$exp - sd.df$Y_Axis
+#this doesnt make as much sense as the other calculation and it also is producing results that doesnt
+#match up with the global maps, so sticking with the anom post-loop calculation
+# sd.df$anom2 <- sd.df$Expected_Raw - sd.df$Y_Axis #this is calculated from the in-loop expected equation 
+
+sd.df$ID <- "Water Year" #change here for the data aggregation
+write.csv(sd.df,paste(path,"all_vars-structured.csv",sep=""))
+
+```
+
+```{r loading data}
+# wy <- read.csv("D:/NASA/SBG Drought/plotting/Budyko/wy-aggregated domain/all_vars-structured.csv")
+cold <- read.csv("D:/NASA/SBG Drought/plotting/Budyko/winter-aggregated domain/all_vars-structured.csv")
+
+# sd.df <- rbind(wy,cold)
+
+#if just doing one
+sd.df <- cold #CHANGE HERE--THIS IS FOR THE WY AND CHANGING TO SHOW JENNY
+
+sd.df$DroughtType <- factor(sd.df$DroughtType, levels = c("1", "2", "3","4"),
+                            labels = c("Dry",
+                                       "NoDrought",
+                                       "Warm",
+                                       "WarmDry"))
+sd.df$DroughtType <- factor(sd.df$DroughtType, levels=c('Dry', 'Warm', 'WarmDry', 'NoDrought'))
+
+sd.df$SnowType <- factor(sd.df$SnowType, levels = c("1","2","3","4","5","6"),
+                         labels = c("Tundra",
+                                    "Boreal\nForest",
+                                    "Maritime",
+                                    "Ephemeral",
+                                    "Prairie",
+                                    "Montane\nForest"))
+
+sd.df <- sd.df %>% filter(Elev !=">5000m") #if not using >5000m
+sd.df$Elev <- factor(sd.df$Elev, levels=c('0-1000m', '1001-2000m', '2001-3000m', '3001-4000m','4001-5000m'))
+
+# sd.df$Elev <- factor(sd.df$Elev, levels=c('0-1000m', '1001-2000m', '2001-3000m', '3001-4000m','4001-5000m','>5000m'))
+
+```
+
+```{r plotting as paired boxplots}
+
+path <- "D:/NASA/SBG Drought/plotting/Budyko/"
+
+sd_dry <- sd.df %>% filter(DroughtType == "Dry" | DroughtType == "NoDrought") %>% filter(band < 70)
+sd_dry$Drought <- ifelse(sd_dry$DroughtType == "Dry", "Drought","No\nDrought")
+sd_dry2 <- sd_dry %>% dplyr::select(band,Drought,Elev,SnowType,anom) %>% filter(Elev !=">5000") %>% as.data.frame()
+
+sd_warm <- sd.df %>% filter(DroughtType == "Warm" | DroughtType == "NoDrought")%>% filter(band < 70)
+sd_warm$Drought <- ifelse(sd_warm$DroughtType == "Warm", "Drought","No\nDrought")
+sd_warm2 <- sd_warm %>% dplyr::select(band,Drought,Elev,SnowType,anom) %>% filter(Elev !=">5000") %>% as.data.frame()
+
+sd_wd <- sd.df %>% filter(DroughtType == "WarmDry" | DroughtType == "NoDrought")%>% filter(band < 70)
+sd_wd$Drought <- ifelse(sd_wd$DroughtType == "WarmDry", "Drought","No\nDrought")
+sd_wd2 <- sd_wd %>% dplyr::select(band,Drought,Elev,SnowType,anom) %>% filter(Elev !=">5000") %>% as.data.frame()
+
+sd_dry2$band <- factor(sd_dry2$band, levels=c('60', '50', '40', '30','20'))
+sd_dry2$Drought <- factor(sd_dry2$Drought, levels=c('No\nDrought',"Drought"))
+
+sd_warm2$band <- factor(sd_warm2$band, levels=c('60', '50', '40', '30','20'))
+sd_warm2$Drought <- factor(sd_warm2$Drought, levels=c('No\nDrought',"Drought"))
+
+sd_wd2$band <- factor(sd_wd2$band, levels=c('60', '50', '40', '30','20'))
+sd_wd2$Drought <- factor(sd_wd2$Drought, levels=c('No\nDrought',"Drought"))
+
+tmp1 <- sd_dry2 %>% group_by(band,Drought,Elev,SnowType) %>% count() %>% as.data.frame()
+points_dry <- tmp1 %>% filter(n < 10)
+points_dry2 <- merge(sd_dry2,points_dry,by = c("band","Drought","Elev","SnowType"))
+
+dry_col_plot <- ggplot(sd_dry2,aes(x = Elev,y=anom,fill=Elev,alpha=Drought,color=Elev,
+                                   group = interaction(Elev, Drought))) +
+  geom_boxplot(position = position_dodge(width = 0.75,preserve = "single"),
+               outliers = FALSE) +
+  scale_alpha_manual(values = c(1,0.7))+
+  geom_point(data = points_dry2, aes(x = Elev,y=anom,color=Elev,alpha = Drought,
+                                    group = interaction(Elev, Drought)))+
+  facet_grid(band~SnowType,scale="free",drop=FALSE)+
+  stat_summary(aes(group = interaction(Elev, Drought)),
+               fun = median, geom = "crossbar", width = 0.35,
+               linewidth = 0.25,
+               position = position_dodge(width = 0.75, preserve = "single"),
+               color = "black") +
+  scale_fill_npg()+
+  scale_color_npg()+
+  geom_hline(yintercept=0)+
+  labs(title="Dry",y="Budyko Anomaly",fill="Elevation",x="") +
+  theme_classic()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "NULL",
+        strip.background.x = element_blank(),
+        strip.background.y = element_blank(),
+        plot.margin=grid::unit(c(0,5,0,1), "mm"),
+        plot.title = element_text(hjust=0.5))
+
+png("D:/NASA/SBG Drought/plotting/Budyko/dry-cold0129.png",width=8,height=4,units="in",res=2000)
+print(dry_col_plot)
+dev.off()
+
+tmp2 <- sd_warm2 %>% group_by(band,Drought,Elev,SnowType) %>% count() %>% as.data.frame()
+points_warm <- tmp2 %>% filter(n < 10)
+points_warm2 <- merge(sd_warm2,points_warm,by = c("band","Drought","Elev","SnowType"))
+
+warm_col_plot <- ggplot(sd_warm2,aes(x = Elev,y=anom,fill=Elev,alpha=Drought,color=Elev,
+                                   group = interaction(Elev, Drought))) +
+  geom_boxplot(position = position_dodge(width = 0.75,preserve = "single"),
+               outliers = FALSE) +
+  scale_alpha_manual(values = c(1,0.7))+
+  geom_point(data = points_warm2, aes(x = Elev,y=anom,color=Elev,alpha = Drought,
+                                    group = interaction(Elev, Drought)))+
+  facet_grid(band~SnowType,scale="free",drop=FALSE)+
+  stat_summary(aes(group = interaction(Elev, Drought)),
+               fun = median, geom = "crossbar", width = 0.35,
+               linewidth = 0.25,
+               position = position_dodge(width = 0.75, preserve = "single"),
+               color = "black") +
+  scale_fill_npg()+
+  scale_color_npg()+
+  geom_hline(yintercept=0)+
+  labs(title="Warm",y="Budyko Anomaly",fill="Elevation",x="") +
+  theme_classic()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.background.x = element_blank(),
+        strip.background.y = element_blank(),
+        plot.margin=grid::unit(c(0,5,0,1), "mm"),
+        legend.position = "NULL",
+        plot.title = element_text(hjust=0.5))
+
+
+png("D:/NASA/SBG Drought/plotting/Budyko/warm-cold0129.png",width=8,height=4,units="in",res=2000)
+print(warm_col_plot)
+dev.off()
+
+tmp3 <- sd_wd2 %>% group_by(band,Drought,Elev,SnowType) %>% count() %>% as.data.frame()
+points_wd <- tmp3 %>% filter(n < 10)
+points_wd2 <- merge(sd_wd2,points_wd,by = c("band","Drought","Elev","SnowType"))
+
+warmdry_col_plot <- ggplot(sd_wd2, aes(x = Elev,y=anom,fill=Elev,alpha=Drought,color=Elev,
+                                   group = interaction(Elev, Drought))) +
+  geom_boxplot(position = position_dodge(width = 0.75,preserve = "single"),
+               outliers = FALSE) +
+  scale_alpha_manual(values = c(1,0.7))+
+  geom_point(data = points_wd2, aes(x = Elev,y=anom,color=Elev,alpha = Drought,
+                                    group = interaction(Elev, Drought)))+
+  facet_grid(band~SnowType,scale="free",drop=FALSE)+
+  stat_summary(aes(group = interaction(Elev, Drought)),
+               fun = median, geom = "crossbar", width = 0.35,
+               linewidth = 0.25,
+               position = position_dodge(width = 0.75, preserve = "single"),
+               color = "black") +
+  scale_fill_npg()+
+  scale_color_npg()+
+  geom_hline(yintercept=0)+
+  labs(title="Warm-Dry",y="Budyko Anomaly",fill="Elevation",x="") +
+  theme_classic()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.background.x = element_blank(),
+        strip.background.y = element_blank(),
+        plot.margin=grid::unit(c(0,5,0,1), "mm"),
+        legend.position = "NULL",
+        plot.title = element_text(hjust=0.5))
+
+
+png("D:/NASA/SBG Drought/plotting/Budyko/warmdry-cold0129.png",width=8,height=4,units="in",res=2000)
+print(warmdry_col_plot)
+dev.off()
+
+
+```
+
+```{r for the legend}
+legend_plot <- ggplot(sd_wd2,aes(x = Elev,y=anom,fill=Elev,alpha=Drought,color=Elev,
+                                   group = interaction(Elev, Drought))) +
+  geom_boxplot(position = position_dodge(width = 0.75,preserve = "single"),
+               outliers = FALSE) +
+  scale_alpha_manual(values = c(1,0.7), guide = guide_legend(override.aes = list(fill = c("black","grey"))))+
+  facet_grid(band~SnowType,scale="free",drop=FALSE)+
+  stat_summary(aes(group = interaction(Elev, Drought)),
+               fun = median, geom = "crossbar", width = 0.35,
+               linewidth = 0.25,
+               position = position_dodge(width = 0.75, preserve = "single"),
+               color = "black") +
+  scale_fill_npg()+
+  scale_color_npg(guide = "none")+
+  geom_hline(yintercept=0)+
+  labs(title="",y="Budyko Anomaly",fill="Elevation",x="") +
+  theme_void()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.background.x = element_blank(),
+        strip.background.y = element_blank(),
+        legend.position = "bottom",
+        plot.margin=grid::unit(c(0,5,0,1), "mm"),
+        legend.margin=margin(c(0,0,1,0)))
+
+library(cowplot)
+
+# Extract the legend
+leg <- get_legend(legend_plot)
+
+# Plot the legend alone
+plot_grid(leg)
+png("D:/NASA/SBG Drought/plotting/Budyko/legend0122.png",width=9,height=4,units="in",res=2000)
+print(plot_grid(leg))
+dev.off()
+
+
+```
+
+
+
+
+
+
+
+
+

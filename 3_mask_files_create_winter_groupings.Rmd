@@ -1,0 +1,127 @@
+---
+title: "Snow Areas Mask"
+author: "Rebecca Gustine"
+date: "2023-07-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(raster)
+library(dplyr)
+
+```
+
+This masks all variables (i.e., P, T, SM, ET, PET) using the snow grid area created in the previous step
+```{r masking all images}
+
+files <- list.files("D:/NASA/SBG Drought/TerraClim/1_individual_files/Monthly VPD/",full.names = TRUE) #change here for the variable you need to mask
+
+for (file in files) {
+  
+  tmp <- raster(file)
+  print(file)
+  month <- strsplit(strsplit(file,"_")[[1]][6],".tif")[[1]][1] 
+  print(month)
+  mask <- raster(paste0("D:/NASA/SBG Drought/TerraClim/2_average_clims/SWE_avg_clim/",month,".tif",sep=""))
+  masked <- mask(tmp,mask,maskvalue=NA)
+  name <- strsplit(file,"/")[[1]][7]
+  writeRaster(masked,paste0("D:/NASA/SBG Drought/TerraClim/3_snow_grid_masked_area/VPD/masked_",name,sep=""),overwrite=TRUE) #change here for the variable folder you masked
+  
+}
+
+```
+
+Creates the 6 month average
+```{r averaging winter groupings}
+patterns = seq(1959,2022,by=1) #cant use 1958 or 2023 because they are incomplete water years
+avg_files <- as.data.frame(list.files("D:/NASA/SBG Drought/TerraClim/3_snow_grid_masked_area/VPD/",full.names = TRUE)) #change here for variable
+names(avg_files) <- "File"
+avg_files$year <- as.numeric(substr(avg_files$File,83,86)) #swe 83,86; precip 86,89; temp 85,88; aet 83,86; sm 83,86
+avg_files$month <- as.numeric(substr(avg_files$File,88,89)) #swe 88,89; precip 91,92; temp 90,91; aet 88,89; sm 88,89
+
+#1/17/25 changed this to >10 because only using November to April  
+avg_files$wy <- ifelse(avg_files$month > 10, avg_files$year+1, avg_files$year) 
+northern_months <- c(11,12,1,2,3,4)
+avg_files$hem <- ifelse(avg_files$month %in% northern_months, "Northern","Southern")
+
+for (year in patterns) {
+  
+  year_files <- avg_files[grep(year,avg_files$wy),]
+  north <- year_files %>% filter(hem == "Northern")
+  north_rast <- calc(stack(north$File),fun=mean,na.rm=TRUE)
+  writeRaster(north_rast,paste0("D:/NASA/SBG Drought/TerraClim/4_average_yearly/northern/VPD/",year,".tif",sep="")) #change here for variable
+    
+}
+
+```
+
+only need to do this once
+calculating the normal as the average of all years (1959-2022)
+```{r making winter 6 month normals}
+
+monthly <- list.files("F:/NASA/SBG Drought/TerraClim/2_average_clims/Tavg_avg_clim/",full.names=TRUE) #change name of variable here
+
+north <- calc(stack(monthly[c(11,12,1,2,3,4)]),fun=mean,na.rm=TRUE)
+writeRaster(north,"F:/NASA/SBG Drought/TerraClim/5_winter_normals/northern/temp.tif") #change name of variable here
+south <- calc(stack(monthly[c(5,6,7,8,9,10)]),fun=mean,na.rm=TRUE)  
+writeRaster(south,"F:/NASA/SBG Drought/TerraClim/5_winter_normals/southern/temp.tif") #change name of variable here
+
+```
+
+
+EVERYTHIGN BELOW HERE IS FOR BUDYKO SPECIFIC STUFF
+Only need to do this for PET, AET, and Precip
+This is doing the same thing but with the aggregated grid created in an earlier step
+```{r}
+var_file <- list.files("D:/NASA/SBG Drought/TerraClim/1_individual_files/Monthly P/",full.names = TRUE)
+mask <- raster("D:/NASA/SBG Drought/TerraClim/aggregate_snow_area.tif")
+#masking everything using the same grid
+
+for (file in var_file) {
+  
+  tmp <- raster(file)
+  print(file)
+  masked <- mask(tmp,mask,maskvalue=0)
+  name <- strsplit(file,"/")[[1]][7]
+  writeRaster(masked,paste0("D:/NASA/SBG Drought/TerraClim/8_budyko_files/aggregate_snow_grid_masked/a_individual/Precip/",name,sep="")) #change here for the variable folder you masked
+  
+}
+
+
+```
+
+1/17/25 making a full yearly grouping for the Budyko analysis. This is different than the above two chunks because I am averaging the whole year (october to september now) for the AET, PET, and P in order to calculate the full yearly budyko.
+Only need this for PET, AET, and P. ONly doing this for the northern hemisphere.
+
+```{r}
+
+patterns = seq(1959,2022,by=1) #cant use 1958 or 2023 because they are incomplete for both the northern and southern hem water years
+# avg_files <- as.data.frame(list.files("D:/NASA/SBG Drought/TerraClim/3_snow_grid_masked_area/Precip/",full.names = TRUE)) #change here for variable; this is for the monthly snow grid
+avg_files <- as.data.frame(list.files("D:/NASA/SBG Drought/TerraClim/8_budyko_files/aggregate_snow_grid_masked/a_individual/PET/",full.names = TRUE)) #change here for variable; this is for the aggregated grid (same one for whole year)
+names(avg_files) <- "File"
+avg_files$year <- as.numeric(substr(avg_files$File,107,110)) # precip 110,113; pet&aet 107,110
+avg_files$month <- as.numeric(substr(avg_files$File,112,113)) #precip 115,116; pet&aet 112,113
+
+#whole northern hem water year  
+avg_files$wy <- ifelse(avg_files$month > 9, avg_files$year+1, avg_files$year) 
+
+#if just using the winter months, use these lines below and then change the folder you're saving to
+northern_months <- c(11,12,1,2,3,4)
+avg_files$hem <- ifelse(avg_files$month %in% northern_months, "Northern","Southern")
+avg_files <- avg_files %>% filter(hem == "Northern")
+
+for (year in patterns) {
+  year_files <- avg_files[grep(year,avg_files$wy),]
+  north_rast <- calc(stack(year_files$File),fun=mean,na.rm=TRUE)
+  writeRaster(north_rast,paste0("D:/NASA/SBG Drought/TerraClim/8_budyko_files/aggregate_snow_grid_masked/b_temporal_aggregates/ii_cold_season/PET/",year,".tif",sep="")) #change here for variable and folder
+    
+}
+
+
+```
+
+
+
+
+

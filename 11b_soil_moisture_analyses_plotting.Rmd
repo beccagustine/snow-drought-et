@@ -1,0 +1,288 @@
+---
+title: "Soil Moisture Time Series and Correlation With ET"
+author: "Rebecca Gustine"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(raster)
+library(dplyr)
+library(ggplot2)
+library(ggsci)
+library(funtimes)
+library(rnaturalearth)
+library(scales)
+library(ggpubr)
+
+```
+
+```{r load sm data}
+
+sm <- list.files("D:/NASA/SBG Drought/TerraClim/7b_sm_snow_drought/",full.names = TRUE)
+
+```
+
+I am opening each yearly file, averaging all data across snow drought and ecosystem types and then doing the same with the sm data. Then I group them by snow class and drought type
+```{r getting data for correlation analysis}
+outs <- data.frame(matrix(nrow = 64*28,ncol=5))
+names(outs) <- c("SnowClassification", "SnowDrought","SM","AET","Year")
+count=1
+for (file in sm) {
+  year <- strsplit(strsplit(file,"/")[[1]][6],".csv")[[1]][1]
+  tmp <- read.csv(file)
+  tmp2 <- tmp %>% select(SM,SnowDrought,SnowClassification) %>% 
+    group_by(SnowDrought,SnowClassification) %>% 
+    summarize_all(mean,na.rm=TRUE) %>% as.data.frame()
+  
+  aet <- read.csv(paste("D:/NASA/SBG Drought/TerraClim/7_aet_snow_drought/northern_boundaries/",year,".csv", sep=""))
+  aet2 <- aet %>% select(AET,SnowDrought,SnowClassification) %>% 
+    group_by(SnowDrought,SnowClassification) %>% 
+    summarize_all(mean,na.rm=TRUE) %>% as.data.frame()
+  
+  sm_aet <- merge(tmp2,aet2,by=c("SnowClassification","SnowDrought"))
+  sm_aet$Year <- year
+  
+  outs[(count:(count+(nrow(sm_aet)-1))),1:5] <- sm_aet
+  count = count + nrow(sm_aet)
+  print(year)
+  
+}
+
+write.csv(outs, "D:/NASA/SBG Drought/average_sm_aet_yearly.csv")
+```
+
+```{r plotting scatterplot with ET and SM}
+avg <- read.csv("D:/NASA/SBG Drought/average_sm_aet_yearly.csv") %>% dplyr::select(-X)
+
+avg$SnowClassification <- as.factor(avg$SnowClassification)
+levels(avg$SnowClassification) <- list(Tundra = "1", `Boreal Forest` = "2", Maritime = "3", `Ephemeral` ="4", Prairie = "5", `Montane Forest` = "6") 
+
+avg$SnowDrought <- as.factor(avg$SnowDrought)
+levels(avg$SnowDrought) <- list(Dry  = "1", Warm = "2", WarmDry = "3", NoDrought = "4")
+
+##his is for a 1 x3 or 3x1 grid without no drought and removing titles
+avg_drought <- avg %>% filter(SnowDrought != "No Drought")
+sm_et_corr_tall_plot <- ggplot(avg_drought) + geom_point(aes(y = SM,x = AET,color=SnowClassification)) +
+  facet_wrap(.~SnowDrought,ncol=3,nrow=1)+
+  labs(y = "Soil Moisture (mm)",x="ET (mm)",color="")+
+  scale_color_npg()+
+  geom_abline(slope = 1)+
+  theme_bw()+
+  theme(strip.background = element_blank(),
+        text = element_text(size=20),
+        legend.position = "bottom")
+
+#either 8x4 or 4x8 depending on column or row orientation
+png("D:/NASA/SBG Drought/plotting/sm-et-corr-grid-nodrought_removed-wide.png", width = 11, height = 4,units = "in", res=1200)
+print(sm_et_corr_tall_plot)
+dev.off()
+
+```
+
+```{r calculaing correlations and p value}
+total <- cor(avg_drought$SM,avg_drought$AET)
+
+for (drought in unique(avg_drought$SnowDrought)) {
+  
+  temp <- avg_drought %>% filter(SnowDrought == drought)
+  corr <- cor.test(temp$SM,temp$AET,method="pearson")
+  print(drought)
+  print(corr)
+}
+
+
+```
+
+Loading the sm sum data 
+```{r loading the sums data}
+
+warm <- read.csv("D:/NASA/SBG Drought/warm_cell_sm_sums.csv") %>% dplyr::select(-c(X))
+dry <- read.csv("D:/NASA/SBG Drought/dry_cell_sm_sums.csv") %>% dplyr::select(-c(X))
+wd <- read.csv("D:/NASA/SBG Drought/warmdry_cell_sm_sums.csv") %>% dplyr::select(-c(X))
+
+```
+
+Need to mask out ice areas
+```{r loading snow classes}
+
+snow <- raster("D:/NASA/SBG Drought/Snow Classifications/snowClass_resample_terraclim_resolution_northern_hem.tif")
+snow.df <- as.data.frame(snow,xy=TRUE)
+snow_crop <- crop(snow,warm.rast) #run this after load the rasters in in the next chunk
+
+
+```
+
+plotting the sums
+```{r plotting sm sums}
+warm.rast <- rasterFromXYZ(warm)
+crs(warm.rast) <- "epsg:4326"
+warm_masked <- mask(warm.rast,snow_crop,maskvalue=7)
+p_warm = projectRaster(warm_masked, crs = "+proj=robin",method = "bilinear")
+p_warm.df <- as.data.frame(p_warm,xy=TRUE)
+
+wd.rast <- rasterFromXYZ(wd)
+crs(wd.rast) <- "epsg:4326"
+wd_masked <- mask(wd.rast,snow_crop,maskvalue=7)
+p_wd = projectRaster(wd_masked, crs = "+proj=robin",method = "bilinear")
+p_wd.df <- as.data.frame(p_wd,xy=TRUE)
+
+dry.rast <- rasterFromXYZ(dry)
+crs(dry.rast) <- "epsg:4326"
+dry_masked <- mask(dry.rast,snow_crop,maskvalue=7)
+p_dry = projectRaster(dry_masked, crs = "+proj=robin",method = "bilinear")
+p_dry.df <- as.data.frame(p_dry,xy=TRUE)
+
+
+worldmap <- ne_countries(scale = 'medium', type = 'map_units',
+                         returnclass = 'sf')
+
+base_test <- ggplot(worldmap) + 
+  geom_sf(fill="lightgrey", color="black",linewidth=.25)+
+  coord_sf(crs = "+proj=robin",ylim = c(2226390,8358252)) + 
+  theme_linedraw() + theme(panel.border = element_blank(),
+                           panel.grid = element_line(linewidth=1))
+
+warm_plot <- base_test + geom_raster(data = p_warm.df, aes(fill = sm_final, x = x, y = y)) +
+  labs(x = "", y = "", fill = "",title="Warm") + #change here for title
+  scale_fill_gradientn(colours = c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7", "#D1E5F0",
+                                   "#92C5DE", "#4393C3", "#2166AC", "#053061"),
+                       values = rescale(c(-400,0,400)),
+                       guide = "colorbar", limits=c(-400,400),
+                       na.value="NA")+
+  theme(legend.position = "none",
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "pt"),   # ← THIS IS KEY
+        panel.spacing = unit(0, "pt"),
+        plot.title=element_text(hjust=0.5)
+        )
+
+png("D:/NASA/SBG Drought/plotting/summed gridcells/warm-sm_sums.png",width=6,height=3,units="in",res=1200)
+print(warm_plot)
+dev.off()
+
+
+dry_plot <- base_test + geom_raster(data = p_dry.df, aes(fill = sm_final, x = x, y = y)) +
+  labs(x = "", y = "", fill = "",title="Dry") + #change here for title
+  scale_fill_gradientn(colours = c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7", "#D1E5F0",
+                                   "#92C5DE", "#4393C3", "#2166AC", "#053061"),
+                       values = rescale(c(-400,0,400)),
+                       guide = "colorbar", limits=c(-400,400),
+                       na.value="NA")+
+  theme(legend.position = "none",
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "pt"),   # ← THIS IS KEY
+        panel.spacing = unit(0, "pt"),
+        plot.title=element_text(hjust=0.5)
+        )
+
+png("D:/NASA/SBG Drought/plotting/summed gridcells/dry-sm_sums.png",width=6,height=3,units="in",res=1200)
+print(dry_plot)
+dev.off()
+
+
+
+warmdry_plot <- base_test + geom_raster(data = p_wd.df, aes(fill = sm_final, x = x, y = y)) +
+  labs(x = "", y = "", fill = "",title="Warm-Dry") + #change here for title
+  scale_fill_gradientn(colours = c("#67001F", "#B2182B", "#D6604D", "#F4A582", "#FDDBC7", "#F7F7F7", "#D1E5F0",
+                                   "#92C5DE", "#4393C3", "#2166AC", "#053061"),
+                       values = rescale(c(-400,0,400)),
+                       guide = "colorbar", limits=c(-400,400),
+                       na.value="NA")+
+  theme(legend.position = "NULL",
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        plot.margin = unit(c(0,0,0,0), "pt"),
+        panel.spacing = unit(0, "pt"),
+        plot.title=element_text(hjust=0.5)
+        )
+#legend.position = "none",
+#use this to output the scale bar by changing the legend position to bottom from NULL,
+#fill title from "" to Soil Moisture\n(mm), width = 10, height = 5 from 6 & 3 and change the save name
+png("D:/NASA/SBG Drought/plotting/summed gridcells/warmdry-sm_sums.png",width=6,height=3,units="in",res=1200)
+print(warmdry_plot)
+dev.off()
+
+```
+
+Using the data read in the previous chunk, create histogram of fluxes by latitude
+
+```{r plotting fluxes by latitude}
+
+warm_lat <- as.data.frame(warm_masked,xy=TRUE)
+warm_lat$dir <- ifelse(warm_lat$sm_final >= 0 , "Pos","Neg")
+warm_lat$y_round <- round(warm_lat$y)
+warm_sum_plot <- warm_lat %>% select(y_round,dir,sm_final) %>% group_by(dir,y_round) %>% summarize_all(sum,na.rm=TRUE)
+
+warm_bar_lat <- ggplot(warm_sum_plot, aes(x = y_round,y=sm_final,fill=dir)) + 
+  geom_col(position="identity")+
+  coord_flip()+
+  scale_fill_manual(values = c("#67001F","#053061"))+
+  scale_x_continuous(breaks = seq(30, 80, by = 10), # Specify exact break points
+    labels = c("30", "40", "50", "60", "70", "80"), # Custom labels for breaks
+  )+
+  scale_y_continuous(labels = label_scientific(),
+                     limits = c(-5000000,5000000),
+                     n.breaks = 3) +
+  labs(x = "Latitude",y="")+
+  theme(legend.position = "NULL",
+        panel.grid.major.y = element_line(color="grey",linetype = 2),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(color = "black"))
+
+wd_lat <- as.data.frame(wd_masked,xy=TRUE)
+wd_lat$dir <- ifelse(wd_lat$sm_final >= 0 , "Pos","Neg")
+wd_lat$y_round <- round(wd_lat$y)
+wd_sum_plot <- wd_lat %>% select(y_round,dir,sm_final) %>% group_by(dir,y_round) %>% summarize_all(sum,na.rm=TRUE)
+
+wd_bar_lat <- ggplot(wd_sum_plot, aes(x = y_round,y=sm_final,fill=dir)) + 
+  geom_col(position="identity")+
+  coord_flip()+
+  scale_fill_manual(values = c("#67001F","#053061"))+
+  scale_x_continuous(breaks = seq(30, 80, by = 10),
+    labels = c("30", "40", "50", "60", "70", "80"), 
+  )+
+  scale_y_continuous(labels = label_scientific(),
+                     limits = c(-5000000,5000000),
+                     n.breaks = 3) +
+  labs(y="Soil Moisture (mm)",x="")+
+  theme(legend.position = "NULL",
+        panel.grid.major.y = element_line(color="grey",linetype = 2),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(color = "black"))
+
+dry_lat <- as.data.frame(dry_masked,xy=TRUE)
+dry_lat$dir <- ifelse(dry_lat$sm_final >= 0 , "Pos","Neg")
+dry_lat$y_round <- round(dry_lat$y)
+dry_sum_plot <- dry_lat %>% select(y_round,dir,sm_final) %>% group_by(dir,y_round) %>% summarize_all(sum,na.rm=TRUE)
+
+dry_bar_lat <- ggplot(dry_sum_plot, aes(x = y_round,y=sm_final,fill=dir)) + 
+  geom_col(position="identity")+
+  coord_flip()+
+  scale_fill_manual(values = c("#67001F","#053061"))+
+  scale_x_continuous(breaks = seq(30, 80, by = 10), # Specify exact break points
+    labels = c("30", "40", "50", "60", "70", "80"), # Custom labels for breaks
+  )+
+  scale_y_continuous(labels = label_scientific(),
+                     limits = c(-5000000,5000000),
+                     n.breaks = 3) +
+  labs(x = "",y="")+
+  theme(legend.position = "NULL",
+        panel.grid.major.y = element_line(color="grey",linetype = 2),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(color = "black"))
+
+bars <- ggarrange(dry_bar_lat,warm_bar_lat,wd_bar_lat,ncol=1,nrow=3)
+
+png("D:/NASA/SBG Drought/plotting/summed gridcells/bars_lat-sm-sums.png",width=2.5,height=6,units="in",res=1200)
+print(bars)
+dev.off()
+
+
+```
+
+
