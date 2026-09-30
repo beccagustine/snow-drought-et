@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it as below."
+title: "Code for: Warm and Combined Warm-Dry Snow Droughts Increase Northern Hemisphere Cold Season Evapotranspiration Fluxes"
+version: 1.0.0
+date-released: 2026-09-30
+authors:
+  - family-names: "Gustine"
+    given-names: "Rebecca N."
+    affiliation: "Lamont-Doherty Earth Observatory of Columbia University"
+  - family-names: "Molotch"
+    given-names: "Noah P."
+    affiliation: "University of Colorado Boulder"
+  - family-names: "Lee"
+    given-names: "Christine M."
+    affiliation: "NASA Jet Propulsion Laboratory"
+  - family-names: "Adam"
+    given-names: "Jennifer C."
+    affiliation: "Washington State University"
+license: MIT
+repository-code: "https://github.com/beccagustine/snow-drought-et"
+keywords:
+  - snow drought
+  - evapotranspiration
+  - Budyko framework
+  - TerraClimate
+abstract: "Analysis code used to identify snow drought types and compute cold season evapotranspiration anomalies, ET/P partitioning, and Budyko anomalies 
+for Gustine et al., submitted to AGU Advances."
